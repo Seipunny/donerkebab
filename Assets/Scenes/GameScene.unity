@@ -6395,6 +6395,8 @@ MonoBehaviour:
   minHoldTime: 0.01
   exitDelay: 0.01
   pickupHoldTime: 1
+  maxPlacementDistance: 5
+  placementOffset: 0.1
 --- !u!1001 &522500462
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -14124,6 +14126,7 @@ MonoBehaviour:
   canBePickedUp: 1
   pickupSpeed: 10
   pickupDistanceThreshold: 0.01
+  previewColor: {r: 1, g: 1, b: 1, a: 1}
 --- !u!65 &1214345460
 BoxCollider:
   m_ObjectHideFlags: 0

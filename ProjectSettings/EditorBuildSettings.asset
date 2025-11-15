@@ -6,8 +6,8 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
-    path: Assets/EasyPeasyFirstPersonController/DemoScene/DemoScene.unity
-    guid: 372cb786c9d4c964caa14ac3cc071151
+    path: Assets/Scenes/GameScene.unity
+    guid: 7f9cd0b1a8f97454383d9393185b6ef3
   m_configObjects:
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 289c1b55c9541489481df5cc06664110, type: 3}
   m_UseUCBPForAssetBundles: 0
