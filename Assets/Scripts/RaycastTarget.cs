@@ -23,9 +23,6 @@ public class RaycastTarget : MonoBehaviour, IRaycastTarget
     [Tooltip("Скорость перемещения к руке")]
     [SerializeField] private float pickupSpeed = 10f;
 
-    [Tooltip("Расстояние до руки при котором считается что объект поднят")]
-    [SerializeField] private float pickupDistanceThreshold = 0.01f;
-
     [Header("Placement Preview Settings")]
     [Tooltip("Цвет силуэта превью (полупрозрачный)")]
     [SerializeField] private Color previewColor = new Color(1f, 1f, 1f, 0.5f);
@@ -41,6 +38,12 @@ public class RaycastTarget : MonoBehaviour, IRaycastTarget
     private Collider[] colliders;
     private bool hadGravity;
     private bool wasKinematic;
+
+    // Placement state
+    private bool isPlacing;
+    private Vector3 targetPlacePosition;
+    private Quaternion targetPlaceRotation;
+    private Vector3 placeVelocity;
 
     // Placement preview state
     private bool isShowingPreview;
@@ -68,10 +71,11 @@ public class RaycastTarget : MonoBehaviour, IRaycastTarget
         targetWidth = outlineWidthDefault;
         currentWidth = outlineWidthDefault;
 
-        // Устанавливаем начальную ширину
+        // Устанавливаем начальную ширину и отключаем компонент
         if (outlineComponent != null)
         {
             outlineComponent.OutlineWidth = outlineWidthDefault;
+            outlineComponent.enabled = false; // Выключаем в начале
         }
 
         // Кешируем компоненты для pickup
@@ -108,10 +112,27 @@ public class RaycastTarget : MonoBehaviour, IRaycastTarget
         // Применяем ширину к Outline
         outlineComponent.OutlineWidth = currentWidth;
 
+        // Оптимизация: отключаем Outline когда ширина близка к 0
+        const float disableThreshold = 0.05f;
+        if (currentWidth <= disableThreshold && outlineComponent.enabled)
+        {
+            outlineComponent.enabled = false;
+        }
+        else if (currentWidth > disableThreshold && !outlineComponent.enabled)
+        {
+            outlineComponent.enabled = true;
+        }
+
         // Обрабатываем перемещение к руке
-        if (isPickedUp && targetHandTransform != null && !isShowingPreview)
+        if (isPickedUp && targetHandTransform != null && !isShowingPreview && !isPlacing)
         {
             ProcessPickupMovement();
+        }
+
+        // Обрабатываем анимацию размещения
+        if (isPlacing)
+        {
+            ProcessPlacementMovement();
         }
 
         // Обновляем позицию превью
@@ -142,6 +163,52 @@ public class RaycastTarget : MonoBehaviour, IRaycastTarget
             targetRotation,
             Time.deltaTime * pickupSpeed
         );
+    }
+
+    private void ProcessPlacementMovement()
+    {
+        // Плавно перемещаем объект к целевой позиции размещения
+        transform.position = Vector3.SmoothDamp(
+            transform.position,
+            targetPlacePosition,
+            ref placeVelocity,
+            1f / pickupSpeed // Используем ту же скорость что и для подбора
+        );
+
+        // Плавно поворачиваем к целевой ориентации
+        transform.rotation = Quaternion.Slerp(
+            transform.rotation,
+            targetPlaceRotation,
+            Time.deltaTime * pickupSpeed
+        );
+
+        // Проверяем достигли ли целевой позиции
+        float distanceToTarget = Vector3.Distance(transform.position, targetPlacePosition);
+        if (distanceToTarget < 0.01f)
+        {
+            // Размещение завершено
+            transform.position = targetPlacePosition;
+            transform.rotation = targetPlaceRotation;
+            isPlacing = false;
+
+            // Восстанавливаем физику
+            if (rb != null)
+            {
+                rb.useGravity = hadGravity;
+                rb.isKinematic = wasKinematic;
+            }
+
+            // Включаем коллайдеры
+            foreach (var col in colliders)
+            {
+                if (col != null)
+                {
+                    col.enabled = true;
+                }
+            }
+
+            Debug.Log($"[RaycastTarget] Placement completed: {gameObject.name}");
+        }
     }
 
     private void OnDisable()
@@ -263,12 +330,14 @@ public class RaycastTarget : MonoBehaviour, IRaycastTarget
         // Скрываем превью
         HidePlacementPreview();
 
-        // Перемещаем объект
-        transform.position = position;
-        transform.rotation = rotation;
+        // Запускаем анимацию размещения
+        targetPlacePosition = position;
+        targetPlaceRotation = rotation;
+        placeVelocity = Vector3.zero;
+        isPlacing = true;
+        isPickedUp = false; // Больше не в руках
 
-        // Восстанавливаем физику и отпускаем
-        OnDrop();
+        Debug.Log($"[RaycastTarget] Starting placement animation to: {position}");
     }
 
     private void CreatePreviewGhost()

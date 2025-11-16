@@ -1,5 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.UI;
+using System.Collections.Generic;
 
 /// <summary>
 /// Независимая система рейкаста, которая работает отдельно от контроллера камеры.
@@ -13,6 +15,9 @@ public class CameraRaycastInteraction : MonoBehaviour
     [Tooltip("Трансформ рук для переноса объектов")]
     [SerializeField] private Transform handTransform;
 
+    [Tooltip("GroundCheck Transform от FPS контроллера для размещения объектов")]
+    [SerializeField] private Transform groundCheckTransform;
+
     [Header("Raycast Settings")]
     [Tooltip("Дальность луча")]
     [SerializeField] private float raycastDistance = 10f;
@@ -20,40 +25,17 @@ public class CameraRaycastInteraction : MonoBehaviour
     [Tooltip("Слои для проверки")]
     [SerializeField] private LayerMask interactionLayers = ~0;
 
-    [Header("Performance Settings")]
-    [Tooltip("Интервал между рейкастами в секундах (меньше = чаще, но тяжелее)")]
-    [Range(0.01f, 0.5f)]
-    [SerializeField] private float raycastInterval = 0.1f; // 10 раз в секунду
 
-    [Tooltip("Использовать FixedUpdate вместо Update (более стабильно)")]
-    [SerializeField] private bool useFixedUpdate = false;
-
-    [Header("Smoothing Settings")]
-    [Tooltip("Минимальное время удержания взгляда на объекте перед активацией")]
-    [Range(0f, 0.5f)]
-    [SerializeField] private float minHoldTime = 0f;
-
-    [Tooltip("Время задержки перед деактивацией при потере взгляда")]
-    [Range(0f, 0.5f)]
-    [SerializeField] private float exitDelay = 0f;
+    [Header("UI References")]
+    [Tooltip("UI Image для прогресс бара подбора (filled radial)")]
+    [SerializeField] private Image pickupProgressBar;
 
     [Header("Pickup Settings")]
     [Tooltip("Время удержания ЛКМ для подбора объекта (секунды)")]
     [SerializeField] private float pickupHoldTime = 1f;
 
-    [Header("Placement Settings")]
-    [Tooltip("Максимальная дистанция размещения объекта")]
-    [SerializeField] private float maxPlacementDistance = 5f;
-
-    [Tooltip("Отступ от поверхности при размещении")]
-    [SerializeField] private float placementOffset = 0.1f;
-
     // Private variables
     private IRaycastTarget currentTarget;
-    private IRaycastTarget pendingTarget;
-    private float timeSinceLastRaycast;
-    private float timeOnPendingTarget;
-    private float timeOffCurrentTarget;
     private bool isInitialized;
 
     // Pickup variables
@@ -61,10 +43,11 @@ public class CameraRaycastInteraction : MonoBehaviour
     private bool isHoldingLMB;
     private IRaycastTarget pickedUpObject;
 
-    // Placement variables
-    private bool isInPlacementMode;
-    private Vector3 previewPosition;
-    private Quaternion previewRotation;
+    // Vegetable portion in hand
+    private List<GameObject> vegetablesInHand = new List<GameObject>();
+    private VegetableType vegetablesInHandType;
+    private bool isMovingVegetablesToHand;
+    private List<Vector3> vegetableVelocities = new List<Vector3>();
 
     private void Awake()
     {
@@ -85,41 +68,80 @@ public class CameraRaycastInteraction : MonoBehaviour
             return;
         }
 
+        // Инициализируем UI
+        if (pickupProgressBar != null)
+        {
+            pickupProgressBar.fillAmount = 0f;
+            pickupProgressBar.gameObject.SetActive(false);
+        }
+
         isInitialized = true;
-        timeSinceLastRaycast = 0f;
-        timeOnPendingTarget = 0f;
-        timeOffCurrentTarget = 0f;
     }
 
     private void Update()
     {
-        if (!isInitialized || useFixedUpdate) return;
+        if (!isInitialized) return;
         ProcessRaycast();
         ProcessPickupInput();
-        ProcessPlacementMode();
+        ProcessPlacementInput();
+        UpdatePickupUI();
+        UpdateVegetablesMovement();
     }
 
-    private void FixedUpdate()
+    private void UpdateVegetablesMovement()
     {
-        if (!isInitialized || !useFixedUpdate) return;
-        ProcessRaycast();
-        ProcessPickupInput();
-        ProcessPlacementMode();
+        if (!isMovingVegetablesToHand || handTransform == null) return;
+
+        bool allReached = true;
+
+        for (int i = 0; i < vegetablesInHand.Count; i++)
+        {
+            if (vegetablesInHand[i] == null) continue;
+
+            Vector3 currentVelocity = vegetableVelocities[i];
+
+            vegetablesInHand[i].transform.position = Vector3.SmoothDamp(
+                vegetablesInHand[i].transform.position,
+                handTransform.position,
+                ref currentVelocity,
+                0.2f
+            );
+
+            vegetableVelocities[i] = currentVelocity;
+
+            vegetablesInHand[i].transform.rotation = Quaternion.Slerp(
+                vegetablesInHand[i].transform.rotation,
+                handTransform.rotation,
+                Time.deltaTime * 5f
+            );
+
+            float distanceToTarget = Vector3.Distance(vegetablesInHand[i].transform.position, handTransform.position);
+            if (distanceToTarget >= 0.05f)
+            {
+                allReached = false;
+            }
+        }
+
+        if (allReached)
+        {
+            foreach (var veg in vegetablesInHand)
+            {
+                if (veg != null)
+                {
+                    veg.transform.SetParent(handTransform);
+                    veg.transform.localPosition = Vector3.zero;
+                    veg.transform.localRotation = Quaternion.identity;
+                }
+            }
+
+            isMovingVegetablesToHand = false;
+            Debug.Log("[CameraRaycastInteraction] All vegetables reached hand");
+        }
     }
 
     private void ProcessRaycast()
     {
-        timeSinceLastRaycast += useFixedUpdate ? Time.fixedDeltaTime : Time.deltaTime;
-
-        // Выполняем рейкаст только с определенным интервалом
-        if (timeSinceLastRaycast >= raycastInterval)
-        {
-            timeSinceLastRaycast = 0f;
-            PerformRaycast();
-        }
-
-        // Обновляем таймеры
-        UpdateTimers();
+        PerformRaycast();
     }
 
     private void PerformRaycast()
@@ -130,127 +152,59 @@ public class CameraRaycastInteraction : MonoBehaviour
         Ray ray = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
 
         // Выполняем raycast
-        bool hitSomething = Physics.Raycast(
-            ray,
-            out RaycastHit hit,
-            raycastDistance,
-            interactionLayers,
-            QueryTriggerInteraction.Ignore
-        );
-
-        if (hitSomething)
+        IRaycastTarget newTarget = null;
+        if (Physics.Raycast(ray, out RaycastHit hit, raycastDistance, interactionLayers, QueryTriggerInteraction.Ignore))
         {
-            // Пытаемся получить IRaycastTarget
-            IRaycastTarget target = hit.collider.GetComponent<IRaycastTarget>();
-
-            if (target != null)
-            {
-                HandleTargetHit(target);
-            }
-            else
-            {
-                HandleNoTarget();
-            }
+            newTarget = hit.collider.GetComponent<IRaycastTarget>();
         }
-        else
-        {
-            HandleNoTarget();
-        }
-    }
 
-    private void HandleTargetHit(IRaycastTarget target)
-    {
-        if (currentTarget == target)
+        // Обрабатываем изменение цели
+        if (newTarget != currentTarget)
         {
-            // Продолжаем смотреть на тот же объект
+            // Деактивируем старую цель
+            if (currentTarget != null)
+            {
+                currentTarget.OnRaycastExit();
+            }
+
+            // Активируем новую цель
+            if (newTarget != null)
+            {
+                newTarget.OnRaycastEnter();
+            }
+
+            currentTarget = newTarget;
+        }
+        else if (currentTarget != null)
+        {
+            // Продолжаем смотреть на ту же цель
             currentTarget.OnRaycastStay();
-            timeOffCurrentTarget = 0f;
-            pendingTarget = null;
-            timeOnPendingTarget = 0f;
-        }
-        else if (pendingTarget == target)
-        {
-            // Продолжаем смотреть на pending объект
-            timeOffCurrentTarget += raycastInterval;
-        }
-        else
-        {
-            // Новый объект обнаружен
-            pendingTarget = target;
-            timeOnPendingTarget = 0f;
-        }
-    }
-
-    private void HandleNoTarget()
-    {
-        pendingTarget = null;
-        timeOnPendingTarget = 0f;
-
-        if (currentTarget != null)
-        {
-            timeOffCurrentTarget += raycastInterval;
-        }
-    }
-
-    private void UpdateTimers()
-    {
-        // Если задержки равны 0, не нужно обрабатывать таймеры
-        if (minHoldTime <= 0f && exitDelay <= 0f)
-        {
-            // Мгновенная активация/деактивация
-            if (pendingTarget != null && currentTarget != pendingTarget)
-            {
-                currentTarget?.OnRaycastExit();
-                currentTarget = pendingTarget;
-                currentTarget.OnRaycastEnter();
-                pendingTarget = null;
-                timeOnPendingTarget = 0f;
-                timeOffCurrentTarget = 0f;
-            }
-            return;
-        }
-
-        float deltaTime = useFixedUpdate ? Time.fixedDeltaTime : Time.deltaTime;
-
-        // Проверяем активацию pending target
-        if (pendingTarget != null && currentTarget != pendingTarget)
-        {
-            timeOnPendingTarget += deltaTime;
-
-            if (timeOnPendingTarget >= minHoldTime)
-            {
-                // Деактивируем текущий
-                if (currentTarget != null)
-                {
-                    currentTarget.OnRaycastExit();
-                }
-
-                // Активируем новый
-                currentTarget = pendingTarget;
-                currentTarget.OnRaycastEnter();
-
-                // Сбрасываем таймеры
-                pendingTarget = null;
-                timeOnPendingTarget = 0f;
-                timeOffCurrentTarget = 0f;
-            }
-        }
-
-        // Проверяем деактивацию текущего target
-        if (currentTarget != null && pendingTarget == null && timeOffCurrentTarget >= exitDelay)
-        {
-            currentTarget.OnRaycastExit();
-            currentTarget = null;
-            timeOffCurrentTarget = 0f;
         }
     }
 
     private void ProcessPickupInput()
     {
-        // Если уже держим объект, пропускаем обработку
+        // Проверяем ЛКМ клик для любых неподнимаемых объектов (работает всегда, даже если держим предмет)
+        if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
+        {
+            if (currentTarget != null)
+            {
+                // Проверяем все типы интерактивных объектов
+                bool isInteractable = !currentTarget.CanBePickedUp();
+
+                if (isInteractable)
+                {
+                    Debug.Log($"[CameraRaycastInteraction] Interacting with: {((MonoBehaviour)currentTarget).gameObject.name}");
+                    InteractWithObject(currentTarget);
+                    return;
+                }
+            }
+        }
+
+        // Если уже держим объект, пропускаем обработку подбора
         if (pickedUpObject != null) return;
 
-        // Проверяем ЛКМ
+        // Проверяем ЛКМ удержание для подбора
         if (Mouse.current != null && Mouse.current.leftButton.isPressed)
         {
             if (!isHoldingLMB)
@@ -262,7 +216,7 @@ public class CameraRaycastInteraction : MonoBehaviour
             // Если смотрим на объект, который можно поднять
             if (currentTarget != null && currentTarget.CanBePickedUp())
             {
-                lmbHoldTimer += useFixedUpdate ? Time.fixedDeltaTime : Time.deltaTime;
+                lmbHoldTimer += Time.deltaTime;
 
                 // Если держали достаточно долго - поднимаем
                 if (lmbHoldTimer >= pickupHoldTime)
@@ -288,6 +242,194 @@ public class CameraRaycastInteraction : MonoBehaviour
         }
     }
 
+    private void InteractWithObject(IRaycastTarget target)
+    {
+        // Проверяем если это интерактивный объект (дверь/окно)
+        if (target is InteractableObject interactable)
+        {
+            interactable.Toggle();
+            Debug.Log($"[CameraRaycastInteraction] Interacted with {((MonoBehaviour)target).gameObject.name}");
+            return;
+        }
+
+        // Проверяем если это контейнер для овощей
+        if (target is VegetableContainer container)
+        {
+            HandleContainerInteraction(container);
+            return;
+        }
+
+        // Проверяем если это мусорка
+        if (target is TrashBin trashBin)
+        {
+            HandleTrashBinInteraction(trashBin);
+            return;
+        }
+    }
+
+    private void HandleContainerInteraction(VegetableContainer container)
+    {
+        Debug.Log($"[CameraRaycastInteraction] HandleContainerInteraction called. Holding object: {pickedUpObject != null}, Holding vegetables: {vegetablesInHand.Count}");
+
+        // Если держим порцию овощей - возвращаем их в контейнер
+        if (vegetablesInHand.Count > 0)
+        {
+            // Проверяем совпадение типов
+            if (vegetablesInHandType == container.GetVegetableType())
+            {
+                ReturnVegetablesToContainer(container);
+            }
+            else
+            {
+                Debug.LogWarning($"[CameraRaycastInteraction] Type mismatch! Holding {vegetablesInHandType}, Container is {container.GetVegetableType()}");
+            }
+            return;
+        }
+
+        // Если держим ящик с овощами - переносим овощи в контейнер
+        if (pickedUpObject != null)
+        {
+            MonoBehaviour pickedMono = pickedUpObject as MonoBehaviour;
+            if (pickedMono != null)
+            {
+                VegetableBox box = pickedMono.GetComponent<VegetableBox>();
+
+                if (box != null)
+                {
+                    Debug.Log($"[CameraRaycastInteraction] Found VegetableBox. Is empty: {box.IsEmpty()}, Vegetable count: {box.GetVegetableCount()}");
+
+                    if (!box.IsEmpty())
+                    {
+                        bool success = box.TransferVegetablesToContainer(container);
+                        if (success)
+                        {
+                            Debug.Log("[CameraRaycastInteraction] Vegetables transferred to container!");
+                        }
+                        else
+                        {
+                            Debug.LogWarning("[CameraRaycastInteraction] Failed to transfer vegetables!");
+                        }
+                        return;
+                    }
+                    else
+                    {
+                        Debug.LogWarning("[CameraRaycastInteraction] Box is empty!");
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning("[CameraRaycastInteraction] Picked object is not a VegetableBox!");
+                }
+            }
+        }
+        // Если руки свободны - забрать овощи из контейнера
+        else if (pickedUpObject == null && vegetablesInHand.Count == 0)
+        {
+            if (!container.IsEmpty())
+            {
+                TakeVegetablesFromContainer(container);
+            }
+            else
+            {
+                Debug.Log("[CameraRaycastInteraction] Container is empty!");
+            }
+        }
+    }
+
+    private void ReturnVegetablesToContainer(VegetableContainer container)
+    {
+        if (vegetablesInHand.Count == 0) return;
+
+        bool success = container.ReturnVegetables(vegetablesInHand);
+
+        if (success)
+        {
+            Debug.Log($"[CameraRaycastInteraction] Returned {vegetablesInHand.Count} vegetables to container");
+
+            // Очищаем руки
+            vegetablesInHand.Clear();
+            vegetableVelocities.Clear();
+        }
+        else
+        {
+            Debug.LogWarning("[CameraRaycastInteraction] Failed to return vegetables to container!");
+        }
+    }
+
+    private void TakeVegetablesFromContainer(VegetableContainer container)
+    {
+        if (handTransform == null)
+        {
+            Debug.LogWarning("[CameraRaycastInteraction] Hand transform not assigned!");
+            return;
+        }
+
+        // Берем овощи из контейнера (последние 4)
+        List<GameObject> takenVegetables = container.TakeVegetables(container.GetTransferAmount());
+
+        if (takenVegetables.Count > 0)
+        {
+            vegetablesInHand = takenVegetables;
+            vegetablesInHandType = container.GetVegetableType();
+            vegetableVelocities.Clear();
+
+            // Инициализируем velocity для каждого овоща
+            for (int i = 0; i < vegetablesInHand.Count; i++)
+            {
+                vegetableVelocities.Add(Vector3.zero);
+                if (vegetablesInHand[i] != null)
+                {
+                    vegetablesInHand[i].SetActive(true);
+                }
+            }
+
+            isMovingVegetablesToHand = true;
+
+            Debug.Log($"[CameraRaycastInteraction] Took {takenVegetables.Count} {container.GetVegetableType()} vegetables from container!");
+        }
+        else
+        {
+            Debug.LogWarning("[CameraRaycastInteraction] Failed to take vegetables from container!");
+        }
+    }
+
+    private void HandleTrashBinInteraction(TrashBin trashBin)
+    {
+        Debug.Log($"[CameraRaycastInteraction] HandleTrashBinInteraction called. Holding object: {pickedUpObject != null}");
+
+        // Если держим пустой ящик - выбросить его
+        if (pickedUpObject != null)
+        {
+            MonoBehaviour pickedMono = pickedUpObject as MonoBehaviour;
+            if (pickedMono != null)
+            {
+                VegetableBox box = pickedMono.GetComponent<VegetableBox>();
+
+                if (box != null)
+                {
+                    if (box.IsEmpty())
+                    {
+                        trashBin.DisposeBox(box);
+                        pickedUpObject = null;
+                        Debug.Log("[CameraRaycastInteraction] Empty box disposed in trash!");
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[CameraRaycastInteraction] Cannot dispose box with {box.GetVegetableCount()} {box.GetVegetableType()} vegetables inside! Empty it first.");
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning("[CameraRaycastInteraction] Picked object is not a VegetableBox!");
+                }
+            }
+        }
+        else
+        {
+            Debug.Log("[CameraRaycastInteraction] No object in hands");
+        }
+    }
+
     private void PickupObject(IRaycastTarget target)
     {
         if (handTransform == null)
@@ -301,101 +443,103 @@ public class CameraRaycastInteraction : MonoBehaviour
         Debug.Log($"[CameraRaycastInteraction] Picked up object: {((MonoBehaviour)target).gameObject.name}");
     }
 
-    private void ProcessPlacementMode()
+    private void ProcessPlacementInput()
     {
-        // Работает только если держим объект
-        if (pickedUpObject == null) return;
-
-        // Проверяем ПКМ для входа в режим размещения
-        bool rmbPressed = Mouse.current != null && Mouse.current.rightButton.isPressed;
-
-        if (rmbPressed)
+        // Проверяем клавишу G для размещения/дропа
+        if (Keyboard.current != null && Keyboard.current.gKey.wasPressedThisFrame)
         {
-            // Входим в режим размещения
-            if (!isInPlacementMode)
+            // Если держим объект - размещаем его
+            if (pickedUpObject != null)
             {
-                EnterPlacementMode();
+                PlaceObjectAtGround();
             }
-
-            // Обновляем позицию превью
-            UpdatePlacementPreview();
-
-            // Проверяем ЛКМ для подтверждения размещения
-            if (Mouse.current.leftButton.wasPressedThisFrame)
+            // Если держим порцию овощей - выбрасываем их
+            else if (vegetablesInHand.Count > 0)
             {
-                ConfirmPlacement();
-            }
-        }
-        else
-        {
-            // Выходим из режима размещения
-            if (isInPlacementMode)
-            {
-                ExitPlacementMode();
+                DropVegetables();
             }
         }
     }
 
-    private void EnterPlacementMode()
+    private void DropVegetables()
     {
-        isInPlacementMode = true;
-        Debug.Log("[CameraRaycastInteraction] Entered placement mode");
-    }
+        if (vegetablesInHand.Count == 0) return;
 
-    private void ExitPlacementMode()
-    {
-        isInPlacementMode = false;
-        if (pickedUpObject != null)
+        Debug.Log($"[CameraRaycastInteraction] Dropping {vegetablesInHand.Count} {vegetablesInHandType} vegetables");
+
+        // Уничтожаем овощи
+        foreach (var veg in vegetablesInHand)
         {
-            pickedUpObject.HidePlacementPreview();
-        }
-        Debug.Log("[CameraRaycastInteraction] Exited placement mode");
-    }
-
-    private void UpdatePlacementPreview()
-    {
-        if (targetCamera == null || pickedUpObject == null) return;
-
-        // Луч из центра экрана
-        Ray ray = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
-
-        // Ограничиваем дистанцию размещения
-        float placementDistance = Mathf.Min(raycastDistance, maxPlacementDistance);
-
-        // Пытаемся найти поверхность
-        if (Physics.Raycast(ray, out RaycastHit hit, placementDistance, interactionLayers, QueryTriggerInteraction.Ignore))
-        {
-            // Размещаем на поверхности с отступом
-            previewPosition = hit.point + hit.normal * placementOffset;
-
-            // Ориентируем по нормали поверхности
-            previewRotation = Quaternion.FromToRotation(Vector3.up, hit.normal);
-        }
-        else
-        {
-            // Если не попали ни во что, размещаем на максимальной дистанции
-            previewPosition = ray.origin + ray.direction * placementDistance;
-            previewRotation = Quaternion.identity;
+            if (veg != null)
+            {
+                Destroy(veg);
+            }
         }
 
-        // Показываем превью
-        pickedUpObject.ShowPlacementPreview(previewPosition, previewRotation);
+        vegetablesInHand.Clear();
+        vegetableVelocities.Clear();
     }
 
-    private void ConfirmPlacement()
+    private void PlaceObjectAtGround()
     {
         if (pickedUpObject == null) return;
 
-        // Размещаем объект
-        pickedUpObject.PlaceAt(previewPosition, previewRotation);
+        if (groundCheckTransform == null)
+        {
+            Debug.LogWarning("[CameraRaycastInteraction] GroundCheck transform not assigned! Cannot place object.");
+            return;
+        }
 
-        Debug.Log($"[CameraRaycastInteraction] Placed object at {previewPosition}");
+        // Размещаем объект впереди GroundCheck с оффсетом
+        float forwardOffset = 0.7f; // Смещение вперед
+        float yOffset = -0.03f;      // Смещение по Y
+
+        Vector3 placePosition = groundCheckTransform.position +
+                                groundCheckTransform.forward * forwardOffset +
+                                Vector3.up * yOffset;
+
+        // Используем ротацию GroundCheck (родительский угол)
+        Quaternion placeRotation = groundCheckTransform.rotation;
+
+        pickedUpObject.PlaceAt(placePosition, placeRotation);
+
+        Debug.Log($"[CameraRaycastInteraction] Placed object at ground: {placePosition}");
 
         // Очищаем состояние
         pickedUpObject = null;
-        isInPlacementMode = false;
         lmbHoldTimer = 0f;
         isHoldingLMB = false;
+    }
+
+    private void UpdatePickupUI()
+    {
+        if (pickupProgressBar == null) return;
+
+        // Показываем прогресс бар только когда удерживаем ЛКМ на поднимаемом объекте
+        bool shouldShowProgress = isHoldingLMB &&
+                                  currentTarget != null &&
+                                  currentTarget.CanBePickedUp() &&
+                                  pickedUpObject == null;
+
+        if (shouldShowProgress)
+        {
+            if (!pickupProgressBar.gameObject.activeSelf)
+            {
+                pickupProgressBar.gameObject.SetActive(true);
+            }
+
+            // Обновляем fillAmount (0 to 1)
+            float progress = Mathf.Clamp01(lmbHoldTimer / pickupHoldTime);
+            pickupProgressBar.fillAmount = progress;
+        }
+        else
+        {
+            if (pickupProgressBar.gameObject.activeSelf)
+            {
+                pickupProgressBar.gameObject.SetActive(false);
+                pickupProgressBar.fillAmount = 0f;
+            }
+        }
     }
 
     private void OnDisable()
@@ -406,21 +550,26 @@ public class CameraRaycastInteraction : MonoBehaviour
             currentTarget.OnRaycastExit();
             currentTarget = null;
         }
-        pendingTarget = null;
-        timeOnPendingTarget = 0f;
-        timeOffCurrentTarget = 0f;
-
-        // Выходим из режима размещения
-        if (isInPlacementMode)
-        {
-            ExitPlacementMode();
-        }
 
         // Отпускаем объект если держим
         if (pickedUpObject != null)
         {
             pickedUpObject.OnDrop();
             pickedUpObject = null;
+        }
+
+        // Удаляем овощи из рук
+        foreach (var veg in vegetablesInHand)
+        {
+            if (veg != null) Destroy(veg);
+        }
+        vegetablesInHand.Clear();
+        vegetableVelocities.Clear();
+
+        // Скрываем UI
+        if (pickupProgressBar != null && pickupProgressBar.gameObject.activeSelf)
+        {
+            pickupProgressBar.gameObject.SetActive(false);
         }
     }
 
@@ -433,18 +582,20 @@ public class CameraRaycastInteraction : MonoBehaviour
             currentTarget = null;
         }
 
-        // Выходим из режима размещения
-        if (isInPlacementMode)
-        {
-            ExitPlacementMode();
-        }
-
         // Отпускаем объект если держим
         if (pickedUpObject != null)
         {
             pickedUpObject.OnDrop();
             pickedUpObject = null;
         }
+
+        // Удаляем овощи из рук
+        foreach (var veg in vegetablesInHand)
+        {
+            if (veg != null) Destroy(veg);
+        }
+        vegetablesInHand.Clear();
+        vegetableVelocities.Clear();
     }
 
     // Для отладки в редакторе
@@ -454,7 +605,7 @@ public class CameraRaycastInteraction : MonoBehaviour
 
         Ray ray = targetCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
 
-        Gizmos.color = currentTarget != null ? Color.green : (pendingTarget != null ? Color.yellow : Color.red);
+        Gizmos.color = currentTarget != null ? Color.green : Color.red;
         Gizmos.DrawRay(ray.origin, ray.direction * raycastDistance);
 
         // Показываем точку попадания
@@ -505,20 +656,5 @@ public class CameraRaycastInteraction : MonoBehaviour
     {
         if (pickupHoldTime <= 0f) return 0f;
         return Mathf.Clamp01(lmbHoldTimer / pickupHoldTime);
-    }
-
-    public bool IsInPlacementMode()
-    {
-        return isInPlacementMode;
-    }
-
-    public Vector3 GetPreviewPosition()
-    {
-        return previewPosition;
-    }
-
-    public Quaternion GetPreviewRotation()
-    {
-        return previewRotation;
     }
 }
