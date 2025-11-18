@@ -15,6 +15,9 @@ public class CameraRaycastInteraction : MonoBehaviour
     [Tooltip("Трансформ рук для переноса объектов")]
     [SerializeField] private Transform handTransform;
 
+    [Tooltip("Трансформы для индивидуального размещения овощей в руке (максимум 4)")]
+    [SerializeField] private Transform[] vegetableHandSlots = new Transform[4];
+
     [Tooltip("GroundCheck Transform от FPS контроллера для размещения объектов")]
     [SerializeField] private Transform groundCheckTransform;
 
@@ -47,7 +50,11 @@ public class CameraRaycastInteraction : MonoBehaviour
     private List<GameObject> vegetablesInHand = new List<GameObject>();
     private VegetableType vegetablesInHandType;
     private bool isMovingVegetablesToHand;
-    private List<Vector3> vegetableVelocities = new List<Vector3>();
+    private List<float> vegetableMoveProgress = new List<float>(); // Прогресс движения от 0 до 1
+
+    // Knife chopping state
+    private Knife currentKnife;
+    private bool isChoppingWithKnife;
 
     private void Awake()
     {
@@ -86,6 +93,7 @@ public class CameraRaycastInteraction : MonoBehaviour
         ProcessPlacementInput();
         UpdatePickupUI();
         UpdateVegetablesMovement();
+        UpdateKnifeChopping();
     }
 
     private void UpdateVegetablesMovement()
@@ -93,49 +101,79 @@ public class CameraRaycastInteraction : MonoBehaviour
         if (!isMovingVegetablesToHand || handTransform == null) return;
 
         bool allReached = true;
+        float accelerationSpeed = 2.5f; // Скорость ускорения
 
         for (int i = 0; i < vegetablesInHand.Count; i++)
         {
             if (vegetablesInHand[i] == null) continue;
 
-            Vector3 currentVelocity = vegetableVelocities[i];
+            // Определяем целевой слот для этого овоща
+            Transform targetSlot = (i < vegetableHandSlots.Length && vegetableHandSlots[i] != null)
+                ? vegetableHandSlots[i]
+                : handTransform;
 
-            vegetablesInHand[i].transform.position = Vector3.SmoothDamp(
-                vegetablesInHand[i].transform.position,
-                handTransform.position,
-                ref currentVelocity,
-                0.2f
-            );
+            // Увеличиваем прогресс с ускорением (квадратичная функция для ускорения)
+            vegetableMoveProgress[i] += Time.deltaTime * accelerationSpeed;
 
-            vegetableVelocities[i] = currentVelocity;
-
-            vegetablesInHand[i].transform.rotation = Quaternion.Slerp(
-                vegetablesInHand[i].transform.rotation,
-                handTransform.rotation,
-                Time.deltaTime * 5f
-            );
-
-            float distanceToTarget = Vector3.Distance(vegetablesInHand[i].transform.position, handTransform.position);
-            if (distanceToTarget >= 0.05f)
+            // Ограничиваем прогресс до 1
+            if (vegetableMoveProgress[i] > 1f)
+            {
+                vegetableMoveProgress[i] = 1f;
+            }
+            else
             {
                 allReached = false;
             }
+
+            // Применяем квадратичную интерполяцию для ускорения (начинаем медленно, ускоряемся)
+            float easedProgress = vegetableMoveProgress[i] * vegetableMoveProgress[i];
+
+            // Интерполируем позицию и ротацию
+            vegetablesInHand[i].transform.position = Vector3.Lerp(
+                vegetablesInHand[i].transform.position,
+                targetSlot.position,
+                easedProgress
+            );
+
+            vegetablesInHand[i].transform.rotation = Quaternion.Slerp(
+                vegetablesInHand[i].transform.rotation,
+                targetSlot.rotation,
+                easedProgress
+            );
         }
 
         if (allReached)
         {
-            foreach (var veg in vegetablesInHand)
+            // Привязываем все овощи к слотам
+            for (int i = 0; i < vegetablesInHand.Count; i++)
             {
-                if (veg != null)
+                if (vegetablesInHand[i] != null)
                 {
-                    veg.transform.SetParent(handTransform);
-                    veg.transform.localPosition = Vector3.zero;
-                    veg.transform.localRotation = Quaternion.identity;
+                    Transform targetSlot = (i < vegetableHandSlots.Length && vegetableHandSlots[i] != null)
+                        ? vegetableHandSlots[i]
+                        : handTransform;
+
+                    // Сохраняем world scale перед сменой родителя
+                    Vector3 originalWorldScale = vegetablesInHand[i].transform.lossyScale;
+
+                    vegetablesInHand[i].transform.SetParent(targetSlot);
+                    vegetablesInHand[i].transform.localPosition = Vector3.zero;
+                    vegetablesInHand[i].transform.localRotation = Quaternion.identity;
+
+                    // Восстанавливаем world scale через local scale
+                    if (targetSlot.lossyScale.x != 0 && targetSlot.lossyScale.y != 0 && targetSlot.lossyScale.z != 0)
+                    {
+                        vegetablesInHand[i].transform.localScale = new Vector3(
+                            originalWorldScale.x / targetSlot.lossyScale.x,
+                            originalWorldScale.y / targetSlot.lossyScale.y,
+                            originalWorldScale.z / targetSlot.lossyScale.z
+                        );
+                    }
                 }
             }
 
             isMovingVegetablesToHand = false;
-            Debug.Log("[CameraRaycastInteraction] All vegetables reached hand");
+            Debug.Log("[CameraRaycastInteraction] All vegetables reached hand slots");
         }
     }
 
@@ -158,6 +196,9 @@ public class CameraRaycastInteraction : MonoBehaviour
             newTarget = hit.collider.GetComponent<IRaycastTarget>();
         }
 
+        // Проверяем можем ли взаимодействовать с новой целью в текущем контексте
+        bool canInteractWithNewTarget = CanInteractWithTarget(newTarget);
+
         // Обрабатываем изменение цели
         if (newTarget != currentTarget)
         {
@@ -167,19 +208,43 @@ public class CameraRaycastInteraction : MonoBehaviour
                 currentTarget.OnRaycastExit();
             }
 
-            // Активируем новую цель
-            if (newTarget != null)
+            // Активируем новую цель только если можем с ней взаимодействовать
+            if (newTarget != null && canInteractWithNewTarget)
             {
                 newTarget.OnRaycastEnter();
             }
 
             currentTarget = newTarget;
         }
-        else if (currentTarget != null)
+        else if (currentTarget != null && canInteractWithNewTarget)
         {
-            // Продолжаем смотреть на ту же цель
+            // Продолжаем смотреть на ту же цель только если можем взаимодействовать
             currentTarget.OnRaycastStay();
         }
+        else if (currentTarget != null && !canInteractWithNewTarget)
+        {
+            // Если больше не можем взаимодействовать - убираем подсветку
+            currentTarget.OnRaycastExit();
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, можем ли мы взаимодействовать с целью в текущем контексте
+    /// </summary>
+    private bool CanInteractWithTarget(IRaycastTarget target)
+    {
+        if (target == null) return false;
+
+        // Если это подбираемый объект (ящик)
+        if (target.CanBePickedUp())
+        {
+            // Можем поднять только если руки свободны
+            return pickedUpObject == null && vegetablesInHand.Count == 0;
+        }
+
+        // Если это интерактивный объект (дверь, окно, контейнер, доска, нож, мусорка)
+        // Всегда можем взаимодействовать
+        return true;
     }
 
     private void ProcessPickupInput()
@@ -194,15 +259,48 @@ public class CameraRaycastInteraction : MonoBehaviour
 
                 if (isInteractable)
                 {
-                    Debug.Log($"[CameraRaycastInteraction] Interacting with: {((MonoBehaviour)currentTarget).gameObject.name}");
-                    InteractWithObject(currentTarget);
+                    // Если это нож - начинаем нарезку, но не вызываем InteractWithObject сразу
+                    if (currentTarget is Knife knife)
+                    {
+                        knife.StartChopping();
+                        currentKnife = knife;
+                        isChoppingWithKnife = true;
+                        Debug.Log("[CameraRaycastInteraction] Started chopping with knife");
+                    }
+                    else
+                    {
+                        Debug.Log($"[CameraRaycastInteraction] Interacting with: {((MonoBehaviour)currentTarget).gameObject.name}");
+                        InteractWithObject(currentTarget);
+                    }
+                    return;
+                }
+
+                // Если держим овощи и смотрим на ящик - разрешить взаимодействие
+                if (vegetablesInHand.Count > 0 && currentTarget.CanBePickedUp())
+                {
+                    Debug.Log($"[CameraRaycastInteraction] Trying to interact with pickupable while holding vegetables");
+                    // Пробуем взять ящик - овощи останутся в руках
+                    // Это не разрешено, показываем предупреждение
+                    Debug.LogWarning("[CameraRaycastInteraction] Cannot pickup objects while holding vegetables! Put vegetables down first.");
                     return;
                 }
             }
         }
 
-        // Если уже держим объект, пропускаем обработку подбора
-        if (pickedUpObject != null) return;
+        // Если отпустили ЛКМ во время нарезки - отменить
+        if (Mouse.current != null && Mouse.current.leftButton.wasReleasedThisFrame)
+        {
+            if (isChoppingWithKnife && currentKnife != null)
+            {
+                currentKnife.CancelChopping();
+                isChoppingWithKnife = false;
+                currentKnife = null;
+                Debug.Log("[CameraRaycastInteraction] Chopping cancelled (LMB released)");
+            }
+        }
+
+        // Если уже держим объект или овощи, пропускаем обработку подбора
+        if (pickedUpObject != null || vegetablesInHand.Count > 0) return;
 
         // Проверяем ЛКМ удержание для подбора
         if (Mouse.current != null && Mouse.current.leftButton.isPressed)
@@ -263,6 +361,20 @@ public class CameraRaycastInteraction : MonoBehaviour
         if (target is TrashBin trashBin)
         {
             HandleTrashBinInteraction(trashBin);
+            return;
+        }
+
+        // Проверяем если это доска для нарезки
+        if (target is CuttingBoard board)
+        {
+            HandleCuttingBoardInteraction(board);
+            return;
+        }
+
+        // Проверяем если это нож
+        if (target is Knife knife)
+        {
+            HandleKnifeInteraction(knife);
             return;
         }
     }
@@ -348,7 +460,7 @@ public class CameraRaycastInteraction : MonoBehaviour
 
             // Очищаем руки
             vegetablesInHand.Clear();
-            vegetableVelocities.Clear();
+            vegetableMoveProgress.Clear();
         }
         else
         {
@@ -371,12 +483,12 @@ public class CameraRaycastInteraction : MonoBehaviour
         {
             vegetablesInHand = takenVegetables;
             vegetablesInHandType = container.GetVegetableType();
-            vegetableVelocities.Clear();
+            vegetableMoveProgress.Clear();
 
-            // Инициализируем velocity для каждого овоща
+            // Инициализируем прогресс для каждого овоща
             for (int i = 0; i < vegetablesInHand.Count; i++)
             {
-                vegetableVelocities.Add(Vector3.zero);
+                vegetableMoveProgress.Add(0f);
                 if (vegetablesInHand[i] != null)
                 {
                     vegetablesInHand[i].SetActive(true);
@@ -395,7 +507,26 @@ public class CameraRaycastInteraction : MonoBehaviour
 
     private void HandleTrashBinInteraction(TrashBin trashBin)
     {
-        Debug.Log($"[CameraRaycastInteraction] HandleTrashBinInteraction called. Holding object: {pickedUpObject != null}");
+        Debug.Log($"[CameraRaycastInteraction] HandleTrashBinInteraction called. Holding object: {pickedUpObject != null}, Holding vegetables: {vegetablesInHand.Count}");
+
+        // Если держим овощи - выбросить их
+        if (vegetablesInHand.Count > 0)
+        {
+            Debug.Log($"[CameraRaycastInteraction] Disposing {vegetablesInHand.Count} {vegetablesInHandType} vegetables in trash");
+
+            // Уничтожаем овощи
+            foreach (var veg in vegetablesInHand)
+            {
+                if (veg != null)
+                {
+                    Destroy(veg);
+                }
+            }
+
+            vegetablesInHand.Clear();
+            vegetableMoveProgress.Clear();
+            return;
+        }
 
         // Если держим пустой ящик - выбросить его
         if (pickedUpObject != null)
@@ -430,6 +561,91 @@ public class CameraRaycastInteraction : MonoBehaviour
         }
     }
 
+    private void HandleCuttingBoardInteraction(CuttingBoard board)
+    {
+        Debug.Log($"[CameraRaycastInteraction] HandleCuttingBoardInteraction called. Vegetables in hand: {vegetablesInHand.Count}");
+
+        // Если держим 1 овощ - положить на доску
+        if (vegetablesInHand.Count == 1)
+        {
+            GameObject veg = vegetablesInHand[0];
+            bool success = board.PlaceVegetable(veg, vegetablesInHandType);
+
+            if (success)
+            {
+                vegetablesInHand.Clear();
+                vegetableMoveProgress.Clear();
+                Debug.Log("[CameraRaycastInteraction] Placed vegetable on cutting board");
+            }
+            else
+            {
+                Debug.LogWarning("[CameraRaycastInteraction] Failed to place vegetable on board");
+            }
+            return;
+        }
+
+        // Если руки пусты и на доске есть овощ - забрать с доски
+        if (vegetablesInHand.Count == 0 && board.HasVegetable())
+        {
+            GameObject veg = board.TakeVegetable();
+            if (veg != null)
+            {
+                vegetablesInHand.Add(veg);
+                vegetablesInHandType = board.GetVegetableType();
+                vegetableMoveProgress.Add(1f); // Овощ уже в руке, прогресс 100%
+
+                // Сохраняем world scale перед сменой родителя
+                Vector3 originalWorldScale = veg.transform.lossyScale;
+
+                // Перемещаем овощ в руку
+                veg.transform.SetParent(handTransform);
+                veg.transform.localPosition = Vector3.zero;
+                veg.transform.localRotation = Quaternion.identity;
+
+                // Восстанавливаем world scale
+                if (handTransform.lossyScale.x != 0 && handTransform.lossyScale.y != 0 && handTransform.lossyScale.z != 0)
+                {
+                    veg.transform.localScale = new Vector3(
+                        originalWorldScale.x / handTransform.lossyScale.x,
+                        originalWorldScale.y / handTransform.lossyScale.y,
+                        originalWorldScale.z / handTransform.lossyScale.z
+                    );
+                }
+
+                Debug.Log("[CameraRaycastInteraction] Took vegetable from cutting board");
+            }
+            return;
+        }
+
+        // Иначе - показать предупреждение
+        if (vegetablesInHand.Count > 1)
+        {
+            Debug.LogWarning("[CameraRaycastInteraction] Can only place 1 vegetable on cutting board!");
+        }
+    }
+
+    private void HandleKnifeInteraction(Knife knife)
+    {
+        Debug.Log("[CameraRaycastInteraction] HandleKnifeInteraction called");
+        // Логика обрабатывается в ProcessPickupInput через удержание ЛКМ
+    }
+
+    private void UpdateKnifeChopping()
+    {
+        // Если зажата ЛКМ на ноже - обновляем нарезку
+        if (isChoppingWithKnife && currentKnife != null)
+        {
+            currentKnife.UpdateChopping(Time.deltaTime);
+
+            // Если нарезка завершена, сбрасываем состояние
+            if (!currentKnife.IsChopping())
+            {
+                isChoppingWithKnife = false;
+                currentKnife = null;
+            }
+        }
+    }
+
     private void PickupObject(IRaycastTarget target)
     {
         if (handTransform == null)
@@ -445,7 +661,7 @@ public class CameraRaycastInteraction : MonoBehaviour
 
     private void ProcessPlacementInput()
     {
-        // Проверяем клавишу G для размещения/дропа
+        // Проверяем клавишу G для размещения
         if (Keyboard.current != null && Keyboard.current.gKey.wasPressedThisFrame)
         {
             // Если держим объект - размещаем его
@@ -453,31 +669,8 @@ public class CameraRaycastInteraction : MonoBehaviour
             {
                 PlaceObjectAtGround();
             }
-            // Если держим порцию овощей - выбрасываем их
-            else if (vegetablesInHand.Count > 0)
-            {
-                DropVegetables();
-            }
+            // Овощи нельзя выбросить клавишей G - только вернуть в контейнер или в мусорку
         }
-    }
-
-    private void DropVegetables()
-    {
-        if (vegetablesInHand.Count == 0) return;
-
-        Debug.Log($"[CameraRaycastInteraction] Dropping {vegetablesInHand.Count} {vegetablesInHandType} vegetables");
-
-        // Уничтожаем овощи
-        foreach (var veg in vegetablesInHand)
-        {
-            if (veg != null)
-            {
-                Destroy(veg);
-            }
-        }
-
-        vegetablesInHand.Clear();
-        vegetableVelocities.Clear();
     }
 
     private void PlaceObjectAtGround()
@@ -564,7 +757,7 @@ public class CameraRaycastInteraction : MonoBehaviour
             if (veg != null) Destroy(veg);
         }
         vegetablesInHand.Clear();
-        vegetableVelocities.Clear();
+        vegetableMoveProgress.Clear();
 
         // Скрываем UI
         if (pickupProgressBar != null && pickupProgressBar.gameObject.activeSelf)
@@ -595,7 +788,7 @@ public class CameraRaycastInteraction : MonoBehaviour
             if (veg != null) Destroy(veg);
         }
         vegetablesInHand.Clear();
-        vegetableVelocities.Clear();
+        vegetableMoveProgress.Clear();
     }
 
     // Для отладки в редакторе
