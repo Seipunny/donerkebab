@@ -106,15 +106,15 @@ public class Knife : MonoBehaviour, IRaycastTarget
             return;
         }
 
-        if (!cuttingBoard.HasVegetable())
+        if (!cuttingBoard.HasVegetables())
         {
-            Debug.LogWarning("[Knife] No vegetable on cutting board!");
+            Debug.LogWarning("[Knife] No vegetables on cutting board!");
             return;
         }
 
-        if (cuttingBoard.IsVegetableChopped())
+        if (cuttingBoard.IsVegetablesChopped())
         {
-            Debug.LogWarning("[Knife] Vegetable already chopped!");
+            Debug.LogWarning("[Knife] Vegetables already chopped!");
             return;
         }
 
@@ -156,7 +156,7 @@ public class Knife : MonoBehaviour, IRaycastTarget
     /// </summary>
     private void CompleteChopping()
     {
-        if (cuttingBoard == null || !cuttingBoard.HasVegetable())
+        if (cuttingBoard == null || !cuttingBoard.HasVegetables())
         {
             CancelChopping();
             return;
@@ -186,8 +186,8 @@ public class Knife : MonoBehaviour, IRaycastTarget
             return;
         }
 
-        // Режем овощ
-        cuttingBoard.ChopVegetable(choppedPrefab);
+        // Режем овощи
+        cuttingBoard.ChopVegetables(choppedPrefab);
 
         isChopping = false;
         choppingProgress = 0f;

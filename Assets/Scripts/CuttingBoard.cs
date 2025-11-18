@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using System.Collections.Generic;
 
 /// <summary>
 /// Доска для нарезки овощей.
@@ -14,17 +15,17 @@ public class CuttingBoard : MonoBehaviour, IRaycastTarget
     [SerializeField] private float transitionSpeed = 10f;
 
     [Header("Board Settings")]
-    [Tooltip("Слот для овоща на доске")]
+    [Tooltip("Слот для овощей на доске")]
     [SerializeField] private Transform vegetableSlot;
 
-    [Tooltip("Текущий овощ на доске")]
-    private GameObject currentVegetable;
+    [Tooltip("Группа овощей на доске")]
+    private List<GameObject> currentVegetables = new List<GameObject>();
 
-    [Tooltip("Тип овоща на доске")]
+    [Tooltip("Тип овощей на доске")]
     private VegetableType currentVegetableType;
 
-    [Tooltip("Порезан ли овощ")]
-    private bool isVegetableChopped;
+    [Tooltip("Порезаны ли овощи")]
+    private bool isVegetablesChopped;
 
     // Outline state
     private float currentOutlineWidth;
@@ -77,13 +78,13 @@ public class CuttingBoard : MonoBehaviour, IRaycastTarget
     }
 
     /// <summary>
-    /// Положить овощ на доску
+    /// Положить группу овощей на доску
     /// </summary>
-    public bool PlaceVegetable(GameObject vegetable, VegetableType type)
+    public bool PlaceVegetables(List<GameObject> vegetables, VegetableType type)
     {
-        if (currentVegetable != null)
+        if (currentVegetables.Count > 0)
         {
-            Debug.LogWarning("[CuttingBoard] Board already has a vegetable!");
+            Debug.LogWarning("[CuttingBoard] Board already has vegetables!");
             return false;
         }
 
@@ -93,66 +94,80 @@ public class CuttingBoard : MonoBehaviour, IRaycastTarget
             return false;
         }
 
-        currentVegetable = vegetable;
+        currentVegetables = new List<GameObject>(vegetables);
         currentVegetableType = type;
-        isVegetableChopped = false;
+        isVegetablesChopped = false;
 
-        // Размещаем овощ на доске
-        vegetable.transform.SetParent(vegetableSlot);
-        vegetable.transform.localPosition = Vector3.zero;
-        vegetable.transform.localRotation = Quaternion.identity;
-        vegetable.SetActive(true);
+        // Размещаем все овощи на доске
+        foreach (var veg in currentVegetables)
+        {
+            if (veg != null)
+            {
+                veg.transform.SetParent(vegetableSlot);
+                veg.transform.localPosition = Vector3.zero;
+                veg.transform.localRotation = Quaternion.identity;
+                veg.SetActive(true);
+            }
+        }
 
-        Debug.Log($"[CuttingBoard] Placed {type} vegetable on board");
+        Debug.Log($"[CuttingBoard] Placed {vegetables.Count} {type} vegetables on board");
         return true;
     }
 
     /// <summary>
-    /// Забрать овощ с доски
+    /// Забрать группу овощей с доски
     /// </summary>
-    public GameObject TakeVegetable()
+    public List<GameObject> TakeVegetables()
     {
-        if (currentVegetable == null)
+        if (currentVegetables.Count == 0)
         {
-            Debug.LogWarning("[CuttingBoard] No vegetable on board!");
-            return null;
+            Debug.LogWarning("[CuttingBoard] No vegetables on board!");
+            return new List<GameObject>();
         }
 
-        GameObject veg = currentVegetable;
-        currentVegetable = null;
-        isVegetableChopped = false;
+        List<GameObject> veggies = new List<GameObject>(currentVegetables);
+        currentVegetables.Clear();
+        isVegetablesChopped = false;
 
-        Debug.Log($"[CuttingBoard] Took vegetable from board");
-        return veg;
+        Debug.Log($"[CuttingBoard] Took {veggies.Count} vegetables from board");
+        return veggies;
     }
 
     /// <summary>
-    /// Порезать овощ (вызывается после успешной нарезки ножом)
+    /// Порезать овощи (вызывается после успешной нарезки ножом)
     /// </summary>
-    public void ChopVegetable(GameObject choppedPrefab)
+    public void ChopVegetables(GameObject choppedPrefab)
     {
-        if (currentVegetable == null)
+        if (currentVegetables.Count == 0)
         {
-            Debug.LogWarning("[CuttingBoard] No vegetable to chop!");
+            Debug.LogWarning("[CuttingBoard] No vegetables to chop!");
             return;
         }
 
-        if (isVegetableChopped)
+        if (isVegetablesChopped)
         {
-            Debug.LogWarning("[CuttingBoard] Vegetable already chopped!");
+            Debug.LogWarning("[CuttingBoard] Vegetables already chopped!");
             return;
         }
 
-        // Уничтожаем старый овощ
-        Destroy(currentVegetable);
+        // Уничтожаем старые овощи
+        foreach (var veg in currentVegetables)
+        {
+            if (veg != null)
+            {
+                Destroy(veg);
+            }
+        }
+        currentVegetables.Clear();
 
-        // Создаем нарезанный овощ
-        currentVegetable = Instantiate(choppedPrefab, vegetableSlot);
-        currentVegetable.transform.localPosition = Vector3.zero;
-        currentVegetable.transform.localRotation = Quaternion.identity;
-        isVegetableChopped = true;
+        // Создаем нарезанный овощ (один объект вместо группы)
+        GameObject choppedVeg = Instantiate(choppedPrefab, vegetableSlot);
+        choppedVeg.transform.localPosition = Vector3.zero;
+        choppedVeg.transform.localRotation = Quaternion.identity;
+        currentVegetables.Add(choppedVeg);
+        isVegetablesChopped = true;
 
-        Debug.Log($"[CuttingBoard] Vegetable chopped! Type: {currentVegetableType}");
+        Debug.Log($"[CuttingBoard] Vegetables chopped! Type: {currentVegetableType}");
     }
 
     // IRaycastTarget implementation
@@ -202,8 +217,9 @@ public class CuttingBoard : MonoBehaviour, IRaycastTarget
     }
 
     // Public getters
-    public bool HasVegetable() => currentVegetable != null;
-    public bool IsVegetableChopped() => isVegetableChopped;
+    public bool HasVegetables() => currentVegetables.Count > 0;
+    public bool IsVegetablesChopped() => isVegetablesChopped;
     public VegetableType GetVegetableType() => currentVegetableType;
     public Transform GetVegetableSlot() => vegetableSlot;
+    public int GetVegetableCount() => currentVegetables.Count;
 }

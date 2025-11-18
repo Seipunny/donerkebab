@@ -565,62 +565,46 @@ public class CameraRaycastInteraction : MonoBehaviour
     {
         Debug.Log($"[CameraRaycastInteraction] HandleCuttingBoardInteraction called. Vegetables in hand: {vegetablesInHand.Count}");
 
-        // Если держим 1 овощ - положить на доску
-        if (vegetablesInHand.Count == 1)
+        // Если держим овощи - положить группу на доску
+        if (vegetablesInHand.Count > 0)
         {
-            GameObject veg = vegetablesInHand[0];
-            bool success = board.PlaceVegetable(veg, vegetablesInHandType);
+            bool success = board.PlaceVegetables(vegetablesInHand, vegetablesInHandType);
 
             if (success)
             {
                 vegetablesInHand.Clear();
                 vegetableMoveProgress.Clear();
-                Debug.Log("[CameraRaycastInteraction] Placed vegetable on cutting board");
+                Debug.Log("[CameraRaycastInteraction] Placed vegetables on cutting board");
             }
             else
             {
-                Debug.LogWarning("[CameraRaycastInteraction] Failed to place vegetable on board");
+                Debug.LogWarning("[CameraRaycastInteraction] Failed to place vegetables on board");
             }
             return;
         }
 
-        // Если руки пусты и на доске есть овощ - забрать с доски
-        if (vegetablesInHand.Count == 0 && board.HasVegetable())
+        // Если руки пусты и на доске есть овощи - забрать с доски
+        if (vegetablesInHand.Count == 0 && board.HasVegetables())
         {
-            GameObject veg = board.TakeVegetable();
-            if (veg != null)
+            List<GameObject> veggies = board.TakeVegetables();
+            if (veggies.Count > 0)
             {
-                vegetablesInHand.Add(veg);
+                vegetablesInHand = veggies;
                 vegetablesInHandType = board.GetVegetableType();
-                vegetableMoveProgress.Add(1f); // Овощ уже в руке, прогресс 100%
+                vegetableMoveProgress.Clear();
 
-                // Сохраняем world scale перед сменой родителя
-                Vector3 originalWorldScale = veg.transform.lossyScale;
-
-                // Перемещаем овощ в руку
-                veg.transform.SetParent(handTransform);
-                veg.transform.localPosition = Vector3.zero;
-                veg.transform.localRotation = Quaternion.identity;
-
-                // Восстанавливаем world scale
-                if (handTransform.lossyScale.x != 0 && handTransform.lossyScale.y != 0 && handTransform.lossyScale.z != 0)
+                // Инициализируем прогресс для каждого овоща
+                for (int i = 0; i < vegetablesInHand.Count; i++)
                 {
-                    veg.transform.localScale = new Vector3(
-                        originalWorldScale.x / handTransform.lossyScale.x,
-                        originalWorldScale.y / handTransform.lossyScale.y,
-                        originalWorldScale.z / handTransform.lossyScale.z
-                    );
+                    vegetableMoveProgress.Add(0f);
                 }
 
-                Debug.Log("[CameraRaycastInteraction] Took vegetable from cutting board");
+                // Перемещаем овощи в руку с анимацией
+                isMovingVegetablesToHand = true;
+
+                Debug.Log($"[CameraRaycastInteraction] Took {veggies.Count} vegetables from cutting board");
             }
             return;
-        }
-
-        // Иначе - показать предупреждение
-        if (vegetablesInHand.Count > 1)
-        {
-            Debug.LogWarning("[CameraRaycastInteraction] Can only place 1 vegetable on cutting board!");
         }
     }
 
